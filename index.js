@@ -224,6 +224,15 @@ async function streamText(systemPrompt, messages, res) {
     }).finally(() => clearTimeout(timer));
 
     if (!response.ok) {
+      // Log why the provider refused. This never leaves the server: the phone
+      // only ever receives the friendly message.
+      let detail = '';
+      try {
+        detail = (await response.text()).slice(0, 400);
+      } catch {
+        detail = '(body unreadable)';
+      }
+      console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
       lastError = `status-${response.status}`;
       continue;
     }
@@ -304,6 +313,15 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
     }).finally(() => clearTimeout(timer));
 
     if (!response.ok) {
+      // Log why the provider refused. This never leaves the server: the phone
+      // only ever receives the friendly message.
+      let detail = '';
+      try {
+        detail = (await response.text()).slice(0, 400);
+      } catch {
+        detail = '(body unreadable)';
+      }
+      console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
       lastError = `status-${response.status}`;
       continue;
     }
@@ -393,13 +411,30 @@ function setupSSE(res) {
   res.flushHeaders?.();
 }
 
-function streamError(res, message) {
+function streamError(res, message, reason) {
   try {
-    res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+    // "reason" is a short machine-readable code for debugging. The app never
+    // shows it: it always renders the friendly "message" text, so no provider
+    // detail can reach a student.
+    const frame = reason ? { error: message, reason } : { error: message };
+    res.write(`data: ${JSON.stringify(frame)}\n\n`);
     res.end();
   } catch {
     /* client already gone */
   }
+}
+
+/**
+ * Turns a thrown error into a stable code, including the upstream HTTP status
+ * when there is one, so a failure can be diagnosed from the outside without
+ * leaking provider detail to the phone.
+ */
+function errorReason(err) {
+  const raw = String(err?.message ?? '');
+  const status = raw.match(/status-(\d{3})/);
+  if (status) return `UPSTREAM_${status[1]}`;
+  if (raw.includes('empty')) return 'EMPTY_RESPONSE';
+  return 'UNKNOWN';
 }
 
 function friendlyProviderError(err) {
@@ -431,7 +466,7 @@ app.post('/api/chat/stream', async (req, res) => {
     res.end();
   } catch (err) {
     console.error('[chat/stream]', err?.message);
-    streamError(res, friendlyProviderError(err));
+    streamError(res, friendlyProviderError(err), errorReason(err));
   }
 });
 
@@ -459,7 +494,7 @@ app.post('/api/quick-action/stream', async (req, res) => {
     res.end();
   } catch (err) {
     console.error('[quick-action/stream]', err?.message);
-    streamError(res, friendlyProviderError(err));
+    streamError(res, friendlyProviderError(err), errorReason(err));
   }
 });
 
@@ -481,7 +516,7 @@ app.post('/api/solve-photo/stream', async (req, res) => {
     res.end();
   } catch (err) {
     console.error('[solve-photo/stream]', err?.message);
-    streamError(res, friendlyProviderError(err));
+    streamError(res, friendlyProviderError(err), errorReason(err));
   }
 });
 
