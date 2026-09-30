@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
-const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'google/gemma-4-31b-it:free';
+const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'qwen/qwen3.8-27b:free';
 
 // Request timeout (30 seconds)
 const REQUEST_TIMEOUT = 30000;
@@ -450,7 +450,11 @@ app.post('/api/solve-photo', async (req, res) => {
       }),
     });
 
-    if (!response.ok) throw new Error('AI request failed');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      console.error(`[error] solve-photo OpenRouter: ${errData?.error?.message || response.status}`);
+      throw new Error(errData?.error?.message || `AI request failed (${response.status})`);
+    }
     const data = await response.json();
     res.json({ response: data?.choices?.[0]?.message?.content || 'No response.' });
   } catch (error) {
