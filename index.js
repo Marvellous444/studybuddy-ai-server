@@ -28,14 +28,19 @@ const TEXT_MODEL_FALLBACKS = [
 const TEXT_MODELS = [...new Set([OPENROUTER_MODEL, ...TEXT_MODEL_FALLBACKS])];
 
 // Vision-capable free models, tried in order until one answers.
+//
+// Every entry must genuinely accept image input. A text-only model in this
+// list is a wasted round trip that always fails, so it was rebuilt from the
+// models that report "image" among their input modalities.
 const VISION_MODELS = [
   'qwen/qwen3.8-27b:free',
   'google/gemma-4-26b-a4b-it:free',
   'google/gemma-4-31b-it:free',
+  'thinkingmachines/inkling:free',
   'thinkingmachines/inkling-small:free',
   'dots-studio/dots-3-note-preview:free',
-  'inclusionai/ling-3.0-flash-sante:free',
-  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'nvidia/nemotron-3.5-content-safety:free',
 ];
 
 const REQUEST_TIMEOUT_MS = 30000;
@@ -236,10 +241,15 @@ async function streamText(systemPrompt, messages, res) {
     }
     const controller = new AbortController();
     // Never let one model use the whole budget.
-    const perModel = Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now());
+    // The timer must cover the whole attempt, not just the response headers.
+    // Clearing it as soon as fetch resolves leaves a stream that then stalls
+    // with no timeout at all, which is how a request could hang for minutes.
+    const perModel = Math.max(1000, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()));
     const timer = setTimeout(() => controller.abort(), perModel);
     const startedAt = Date.now();
+    let full = '';
 
+    try {
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: aiHeaders(),
@@ -250,7 +260,7 @@ async function streamText(systemPrompt, messages, res) {
         max_tokens: 2000,
       }),
       signal: controller.signal,
-    }).finally(() => clearTimeout(timer));
+    });
 
     if (!response.ok) {
       // Log why the provider refused. This never leaves the server: the phone
@@ -267,7 +277,6 @@ async function streamText(systemPrompt, messages, res) {
     }
 
     let firstTokenMs = null;
-    let full = '';
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -305,7 +314,25 @@ async function streamText(systemPrompt, messages, res) {
       console.log(`[timing] complete=${Date.now() - startedAt}ms chars=${full.length} model=${model}`);
       return full;
     }
+    console.error(`[upstream] ${model} returned an empty stream`);
     lastError = 'empty';
+    } catch (err) {
+      // If text already reached the student, hand back what we have rather
+      // than discarding an answer they can already see.
+      if (full) {
+        console.error(`[text] ${model} stalled after ${full.length} chars, keeping partial`);
+        return full;
+      }
+      if (err?.name === 'AbortError') {
+        console.error(`[text] ${model} timed out after ${perModel}ms`);
+        lastError = 'timeout';
+      } else {
+        console.error(`[text] ${model} failed: ${err?.message}`);
+        lastError = 'error';
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   throw new Error(lastError);
@@ -322,10 +349,13 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
       break;
     }
     const controller = new AbortController();
-    const perModel = Math.min(IMAGE_TIMEOUT_MS, deadline - Date.now());
+    // As with text, this timer has to outlive the response headers.
+    const perModel = Math.max(1000, Math.min(IMAGE_TIMEOUT_MS, deadline - Date.now()));
     const timer = setTimeout(() => controller.abort(), perModel);
     const startedAt = Date.now();
+    let full = '';
 
+    try {
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: aiHeaders(),
@@ -345,7 +375,7 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
         max_tokens: 2000,
       }),
       signal: controller.signal,
-    }).finally(() => clearTimeout(timer));
+    });
 
     if (!response.ok) {
       // Log why the provider refused. This never leaves the server: the phone
@@ -361,7 +391,6 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
       continue;
     }
 
-    let full = '';
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -395,7 +424,24 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
       console.log(`[vision] used=${model} chars=${full.length} ms=${Date.now() - startedAt}`);
       return full;
     }
+    console.error(`[upstream] ${model} returned an empty image stream`);
     lastError = 'empty';
+    } catch (err) {
+      // Keep any partial reading rather than discarding work already on screen.
+      if (full) {
+        console.error(`[vision] ${model} stalled after ${full.length} chars, keeping partial`);
+        return full;
+      }
+      if (err?.name === 'AbortError') {
+        console.error(`[vision] ${model} timed out after ${perModel}ms`);
+        lastError = 'timeout';
+      } else {
+        console.error(`[vision] ${model} failed: ${err?.message}`);
+        lastError = 'error';
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   throw new Error(lastError);
