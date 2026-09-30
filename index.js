@@ -32,16 +32,12 @@ const TEXT_MODELS = [...new Set([OPENROUTER_MODEL, ...TEXT_MODEL_FALLBACKS])];
 // Every entry must genuinely accept image input. A text-only model in this
 // list is a wasted round trip that always fails, so it was rebuilt from the
 // models that report "image" among their input modalities.
-const VISION_MODELS = [
-  'qwen/qwen3.8-27b:free',
-  'google/gemma-4-26b-a4b-it:free',
-  'google/gemma-4-31b-it:free',
-  'thinkingmachines/inkling:free',
-  'thinkingmachines/inkling-small:free',
-  'dots-studio/dots-3-note-preview:free',
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-  'nvidia/nemotron-3.5-content-safety:free',
-];
+// Vision on the free tier, used only after Gemini is exhausted. Measured
+// while diagnosing photo failures: all of these refused, six with 429 and two
+// with 403, and the list was unchanged after a full day of testing. Eight dead
+// entries cost time and a slice of the attempt budget for no possible answer,
+// so only the two that were closest to answering are kept.
+const VISION_MODELS = ['qwen/qwen3.8-27b:free', 'dots-studio/dots-3-note-preview:free'];
 
 // ---------- Providers ----------
 // Every provider here speaks the OpenAI chat-completions dialect, so one code
@@ -70,9 +66,12 @@ const PROVIDERS = [
       'gemini-3.7-flash',
     ],
     // Each confirmed to read a rendered maths problem and return the answer.
+    // flash-lite-latest leads: it answered straight away while the model above
+    // it was returning 429 on consecutive attempts, and it is also the quickest
+    // of the models that read an image correctly.
     visionModels: [
-      'gemini-3-flash-preview',
       'gemini-flash-lite-latest',
+      'gemini-3-flash-preview',
       'gemini-3.1-flash-lite-preview',
       'gemini-3.8-flash',
     ],
