@@ -100,7 +100,7 @@ const STYLE_GUIDE = {
   Detailed: 'Explain thoroughly. Include multiple examples, reasoning behind each step, and common mistakes to avoid.',
 };
 
-function buildSystemPrompt(schoolLevel, subject, answerStyle) {
+function buildSystemPrompt(schoolLevel, subject, answerStyle, language) {
   const parts = ['You are StudyBuddy AI, a friendly and encouraging tutor for students.'];
 
   if (subject && subject !== 'All Subjects') {
@@ -110,12 +110,28 @@ function buildSystemPrompt(schoolLevel, subject, answerStyle) {
   parts.push(LEVEL_GUIDE[schoolLevel] ?? LEVEL_GUIDE['High School']);
   parts.push(STYLE_GUIDE[answerStyle] ?? STYLE_GUIDE.Normal);
 
+  if (language && language !== 'English') {
+    parts.push(
+      `Write your entire answer in ${language}, at a natural native level a student would use. ` +
+        'Keep mathematics, formulas, units and chemical symbols in their standard form, ' +
+        `but write all prose in ${language}.`,
+    );
+  }
+
   parts.push(
     'Format with markdown: **bold** for key terms, short bullet lists, and numbered steps. ' +
       'Never state a fact you are unsure about. If a question is unclear, ask for clarification.',
   );
 
   return parts.join(' ');
+}
+
+/**
+ * Every endpoint takes the same optional "language" field, so the prompt
+ * builder always receives one even when the phone omits it.
+ */
+function readLanguage(body) {
+  return body?.language ?? 'English';
 }
 
 function buildMessages(question, conversationHistory) {
@@ -408,7 +424,7 @@ app.post('/api/chat/stream', async (req, res) => {
   if (!question) return streamError(res, 'Question is required.');
 
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const messages = buildMessages(question, conversationHistory);
     const text = await streamText(prompt, messages, res);
     res.write(`data: ${JSON.stringify({ done: true, chars: text.length })}\n\n`);
@@ -436,7 +452,7 @@ app.post('/api/quick-action/stream', async (req, res) => {
   if (!followUp) return streamError(res, 'That action is not available.');
 
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const messages = buildMessages(followUp, conversationHistory);
     const text = await streamText(prompt, messages, res);
     res.write(`data: ${JSON.stringify({ done: true, chars: text.length })}\n\n`);
@@ -455,7 +471,7 @@ app.post('/api/solve-photo/stream', async (req, res) => {
   if (invalid) return streamError(res, invalid);
 
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const userText = question?.trim()
       ? `${PHOTO_INSTRUCTION}\n\nThe student asks: ${String(question).slice(0, 1000)}`
       : PHOTO_INSTRUCTION;
@@ -474,7 +490,7 @@ app.post('/api/ask', async (req, res) => {
   const { question, subject = null, schoolLevel, answerStyle, conversationHistory = [] } = req.body ?? {};
   if (!question) return res.status(400).json({ error: 'Question is required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const text = await callTextModel(prompt, buildMessages(question, conversationHistory));
     res.json({ response: text });
   } catch (err) {
@@ -488,7 +504,7 @@ app.post('/api/solve-photo', async (req, res) => {
   const invalid = validateImage(image, mimeType);
   if (invalid) return res.status(400).json({ error: invalid });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const userText = question?.trim()
       ? `${PHOTO_INSTRUCTION}\n\nThe student asks: ${String(question).slice(0, 1000)}`
       : PHOTO_INSTRUCTION;
@@ -504,7 +520,7 @@ app.post('/api/flashcards', async (req, res) => {
   const { topic, subject = null, schoolLevel, answerStyle } = req.body ?? {};
   if (!topic) return res.status(400).json({ error: 'Topic is required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const text = await callTextModel(
       prompt,
       [
@@ -532,7 +548,7 @@ app.post('/api/quiz', async (req, res) => {
   const { topic, subject = null, schoolLevel, answerStyle } = req.body ?? {};
   if (!topic) return res.status(400).json({ error: 'Topic is required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const text = await callTextModel(
       prompt,
       [
@@ -560,7 +576,7 @@ app.post('/api/explain', async (req, res) => {
   const { topic, subject = null, schoolLevel, answerStyle } = req.body ?? {};
   if (!topic) return res.status(400).json({ error: 'Topic is required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const text = await callTextModel(prompt, [
       { role: 'user', content: `Explain "${String(topic).slice(0, 500)}". Start with a one-sentence definition, then break it into key ideas.` },
     ]);
@@ -575,7 +591,7 @@ app.post('/api/summarize', async (req, res) => {
   const { notes, subject = null, schoolLevel, answerStyle } = req.body ?? {};
   if (!notes) return res.status(400).json({ error: 'Notes are required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const text = await callTextModel(
       prompt,
       [
@@ -597,7 +613,7 @@ app.post('/api/summarize', async (req, res) => {
 app.post('/api/practice-problems', async (req, res) => {
   const { subject = null, schoolLevel, answerStyle } = req.body ?? {};
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle);
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
     const topic = subject ? ` about ${subject}` : '';
     const text = await callTextModel(
       prompt,
@@ -622,11 +638,60 @@ app.post('/api/practice-problems', async (req, res) => {
   }
 });
 
+const WRITING_TASKS = {
+  'grammar-check': 'Find every grammar and spelling mistake. For each one, show the original, the correction, and a one-line reason.',
+  'improve-writing':
+    'Rewrite the text so it is clearer and more polished, keeping the student\'s own voice and meaning. Show the improved version, then list what you changed and why.',
+  'structure':
+    'Suggest a clear structure for this text: an opening, main points in the best order, and a conclusion. Give a short outline the student can follow.',
+  'thesis':
+    'Help write one strong thesis statement. Offer three different options at different levels of directness, then explain which is strongest and why.',
+  'counter-argument':
+    'Give the strongest counter-argument to the main claim in this text, then suggest how the student could address it honestly.',
+  'simplify': 'Rewrite this text in simpler language so a younger student could follow it. Keep the meaning accurate.',
+  'transition':
+    'Suggest smooth transition sentences to connect these ideas in order. Give one option per gap and explain the effect.',
+};
+
+app.post('/api/writing-assistant', async (req, res) => {
+  const { text, task, subject = null, schoolLevel, answerStyle, language } = req.body ?? {};
+
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return res.status(400).json({ error: 'Please paste or type some text first.' });
+  if (trimmed.length > 8000) {
+    return res.status(400).json({ error: 'That text is too long. Try a smaller section.' });
+  }
+
+  const instruction = WRITING_TASKS[task];
+  if (!instruction) return res.status(400).json({ error: 'That writing task is not available.' });
+
+  try {
+    const prompt = buildSystemPrompt(schoolLevel, subject, answerStyle, readLanguage(req.body));
+    const answer = await callTextModel(
+      `${prompt} You are helping a student improve their own writing. Be encouraging and specific. ` +
+        'Never rewrite it as finished homework the student could submit as-is: teach and guide instead. ' +
+        'Use markdown with short sections.',
+      [
+        {
+          role: 'user',
+          content: `${instruction}\n\nStudent's text:\n"""\n${trimmed}\n"""`,
+        },
+      ],
+      1800,
+    );
+
+    res.json({ response: answer });
+  } catch (err) {
+    console.error('[writing-assistant]', err?.message);
+    res.status(500).json({ error: friendlyProviderError(err) });
+  }
+});
+
 app.post('/api/check-answer', async (req, res) => {
   const { question, answer, subject = null, schoolLevel } = req.body ?? {};
   if (!question || !answer) return res.status(400).json({ error: 'Question and answer are required.' });
   try {
-    const prompt = buildSystemPrompt(schoolLevel, subject, 'Short');
+    const prompt = buildSystemPrompt(schoolLevel, subject, 'Short', readLanguage(req.body));
     const text = await callTextModel(
       prompt,
       [
