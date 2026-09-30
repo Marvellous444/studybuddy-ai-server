@@ -81,7 +81,10 @@ const PROVIDERS = [
     name: 'groq',
     url: 'https://api.groq.com/openai/v1/chat/completions',
     key: process.env.GROQ_API_KEY,
-    textModels: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
+    // qwen leads because it returns visible text at any token budget, whereas
+    // the gpt-oss models spend the opening tokens on hidden reasoning and can
+    // reply HTTP 200 with nothing to show. They stay as fallbacks.
+    textModels: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'],
     // The free Groq menu is text only, so photos must go elsewhere.
     visionModels: [],
   },
@@ -292,19 +295,39 @@ function openAiRequest(provider, body, timeoutMs) {
 /** Call the first text model that succeeds. */
 async function callTextModel(systemPrompt, messages, maxTokens = 2000) {
   let lastError = 'AI unavailable';
+  // Without this the loop can spend (models x timeout) in silence before it
+  // gives up, which with several providers configured is minutes of nothing.
+  const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
+
   for (const { provider, model } of TEXT_ATTEMPTS) {
-    const response = await openAiRequest(
-      provider,
-      { model, messages: [{ role: 'system', content: systemPrompt }, ...messages], max_tokens: maxTokens },
-      REQUEST_TIMEOUT_MS,
-    );
-    if (response.ok) {
-      const data = await response.json();
-      const text = data?.choices?.[0]?.message?.content;
-      if (text && text.trim()) return text;
-      lastError = 'empty';
-    } else {
-      lastError = `status-${response.status}`;
+    if (Date.now() >= deadline) {
+      console.error(`[text] budget exhausted, last error was ${lastError}`);
+      break;
+    }
+    // Never let one model spend what is left of the budget.
+    const perModel = Math.max(1000, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()));
+
+    try {
+      const response = await openAiRequest(
+        provider,
+        { model, messages: [{ role: 'system', content: systemPrompt }, ...messages], max_tokens: maxTokens },
+        perModel,
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        if (text && text.trim()) return text;
+        console.error(`[upstream] ${provider.name}/${model} returned no text`);
+        lastError = 'empty';
+      } else {
+        lastError = `status-${response.status}`;
+      }
+    } catch (err) {
+      // A stall or a dropped connection is this candidate's failure, not the
+      // request's. Without this the abort threw straight out of the loop and
+      // one unresponsive provider broke every non-streaming feature.
+      lastError = err?.name === 'AbortError' ? 'timeout' : 'error';
+      console.error(`[upstream] ${provider.name}/${model} ${lastError}`);
     }
   }
   throw new Error(lastError);
@@ -549,34 +572,48 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
 /** Non-streaming vision call used as a fallback path. */
 async function callVision(base64Image, mimeType, systemPrompt, userText) {
   let lastError = 'AI unavailable';
+  // Same reasoning as callTextModel: an unbounded loop means a failing photo
+  // request hangs instead of failing promptly.
+  const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
 
   for (const { provider, model } of VISION_ATTEMPTS) {
-    const response = await openAiRequest(
-      provider,
-      {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: userText },
-              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-            ],
-          },
-        ],
-        max_tokens: 2000,
-      },
-      IMAGE_TIMEOUT_MS,
-    );
+    if (Date.now() >= deadline) {
+      console.error(`[vision] budget exhausted, last error was ${lastError}`);
+      break;
+    }
+    const perModel = Math.max(1000, Math.min(IMAGE_TIMEOUT_MS, deadline - Date.now()));
 
-    if (response.ok) {
-      const data = await response.json();
-      const text = data?.choices?.[0]?.message?.content;
-      if (text && text.trim()) return text;
-      lastError = 'empty';
-    } else {
-      lastError = `status-${response.status}`;
+    try {
+      const response = await openAiRequest(
+        provider,
+        {
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: userText },
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+              ],
+            },
+          ],
+          max_tokens: 2000,
+        },
+        perModel,
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        if (text && text.trim()) return text;
+        console.error(`[upstream] ${provider.name}/${model} returned no image text`);
+        lastError = 'empty';
+      } else {
+        lastError = `status-${response.status}`;
+      }
+    } catch (err) {
+      lastError = err?.name === 'AbortError' ? 'timeout' : 'error';
+      console.error(`[upstream] ${provider.name}/${model} ${lastError}`);
     }
   }
 
