@@ -404,6 +404,41 @@ app.post('/api/solve-photo/stream', async (req, res) => {
   }
 });
 
+// Debug endpoint - tests vision model with a tiny image
+app.post('/api/debug-vision', async (req, res) => {
+  if (!OPENROUTER_API_KEY) return res.json({ error: 'No API key' });
+
+  const tinyImage = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  try {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://studybuddy.ai',
+        'X-Title': 'StudyBuddy AI',
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_VISION_MODEL,
+        messages: [
+          { role: 'user', content: [
+            { type: 'text', text: 'What color is this?' },
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${tinyImage}` } },
+          ]},
+        ],
+        max_tokens: 50,
+      }),
+    });
+
+    const status = response.status;
+    const data = await response.json().catch(() => ({}));
+    res.json({ status, model: OPENROUTER_VISION_MODEL, ok: response.ok, response: data });
+  } catch (error) {
+    res.json({ error: error.message, model: OPENROUTER_VISION_MODEL });
+  }
+});
+
 // ============ NON-STREAMING ENDPOINTS (for JSON responses) ============
 
 // Solve photo (non-streaming - used by photo solver screen)
