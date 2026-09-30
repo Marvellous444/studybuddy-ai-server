@@ -56,15 +56,26 @@ const PROVIDERS = [
     name: 'gemini',
     url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     key: process.env.GEMINI_API_KEY,
-    // Free of charge on the unpaid tier: the Flash family plus 2.5 Pro.
+    // Every model below was verified with a real request, because appearing
+    // in the model listing does not mean being callable. The retired 2.5
+    // entries answer 404 for a new account despite still being listed, and the
+    // pro aliases answer 429 because the free tier has no pro quota, so both
+    // groups are left out instead of costing a wasted round trip.
     textModels: [
+      'gemini-3-flash-preview',
+      'gemini-flash-lite-latest',
+      'gemini-3.1-flash-lite-preview',
+      // Saturated when tested (503), but real, so worth retrying later.
       'gemini-3.8-flash',
       'gemini-3.7-flash',
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
     ],
-    // All of these accept image input.
-    visionModels: ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+    // Each confirmed to read a rendered maths problem and return the answer.
+    visionModels: [
+      'gemini-3-flash-preview',
+      'gemini-flash-lite-latest',
+      'gemini-3.1-flash-lite-preview',
+      'gemini-3.8-flash',
+    ],
   },
   {
     name: 'groq',
