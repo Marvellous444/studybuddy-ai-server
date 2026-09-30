@@ -282,9 +282,7 @@ async function streamText(systemPrompt, messages, res) {
         detail = '(body unreadable)';
       }
       console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
-      outcomes.push(`${model.split('/').pop().split(':')[0]}=${response.status}`);
       lastError = `status-${response.status}`;
-      if (response.status === 429) await sleep(400);
       continue;
     }
 
@@ -402,7 +400,11 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
         detail = '(body unreadable)';
       }
       console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
+      outcomes.push(`${model.split('/').pop().split(':')[0]}=${response.status}`);
       lastError = `status-${response.status}`;
+      // Free vision models share a rate limit, so pause before the next
+      // attempt rather than tripping it again immediately.
+      if (response.status === 429) await sleep(400);
       continue;
     }
 
