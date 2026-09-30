@@ -24,6 +24,8 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     apiKeyConfigured: !!OPENROUTER_API_KEY,
     model: OPENROUTER_MODEL,
+    envKeys: Object.keys(process.env).filter(k => k.includes('OPENROUTER') || k.includes('API')),
+    hasDotenv: typeof process.env.OPENROUTER_API_KEY !== 'undefined',
   });
 });
 
