@@ -272,7 +272,9 @@ async function streamText(systemPrompt, messages, res) {
         detail = '(body unreadable)';
       }
       console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
+      outcomes.push(`${model.split('/').pop().split(':')[0]}=${response.status}`);
       lastError = `status-${response.status}`;
+      if (response.status === 429) await sleep(400);
       continue;
     }
 
@@ -342,6 +344,9 @@ async function streamText(systemPrompt, messages, res) {
 async function streamVision(base64Image, mimeType, systemPrompt, userText, res) {
   let lastError = 'AI unavailable';
   const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
+  // Compact record of what each model did. Surfaced only in the diagnostic
+  // "reason" field; the phone always renders its own friendly wording.
+  const outcomes = [];
 
   for (const model of VISION_MODELS) {
     if (Date.now() >= deadline) {
@@ -425,6 +430,7 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
       return full;
     }
     console.error(`[upstream] ${model} returned an empty image stream`);
+    outcomes.push(`${model.split('/').pop().split(':')[0]}=empty`);
     lastError = 'empty';
     } catch (err) {
       // Keep any partial reading rather than discarding work already on screen.
@@ -444,6 +450,9 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
     }
   }
 
+  // Attach the per-model summary so the cause is visible without exposing any
+  // provider detail to the student.
+  if (outcomes.length) lastError = `${lastError}|${outcomes.join(',')}`;
   throw new Error(lastError);
 }
 
@@ -510,6 +519,11 @@ function streamError(res, message, reason) {
  * when there is one, so a failure can be diagnosed from the outside without
  * leaking provider detail to the phone.
  */
+/** Waits without needing a timer library. */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function errorReason(err) {
   const raw = String(err?.message ?? '');
   const status = raw.match(/status-(\d{3})/);
