@@ -43,6 +43,66 @@ const VISION_MODELS = [
   'nvidia/nemotron-3.5-content-safety:free',
 ];
 
+// ---------- Providers ----------
+// Every provider here speaks the OpenAI chat-completions dialect, so one code
+// path serves all of them and a new provider is just another entry below.
+//
+// Order matters. Gemini leads because its free tier needs no card and it is the
+// only free provider that can read a photo, which is what the camera feature
+// depends on. The rest exist so that one provider being rate limited is a
+// slower answer rather than an error.
+const PROVIDERS = [
+  {
+    name: 'gemini',
+    url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    key: process.env.GEMINI_API_KEY,
+    // Free of charge on the unpaid tier: the Flash family plus 2.5 Pro.
+    textModels: [
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+    ],
+    // All of these accept image input.
+    visionModels: ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+  },
+  {
+    name: 'groq',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    key: process.env.GROQ_API_KEY,
+    textModels: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
+    // The free Groq menu is text only, so photos must go elsewhere.
+    visionModels: [],
+  },
+  {
+    name: 'openrouter',
+    url: OPENROUTER_API_URL,
+    key: OPENROUTER_API_KEY,
+    textModels: TEXT_MODELS,
+    visionModels: VISION_MODELS,
+    // OpenRouter asks callers to identify the app.
+    extraHeaders: {
+      'HTTP-Referer': 'https://studybuddy.ai',
+      'X-Title': 'StudyBuddy AI',
+    },
+  },
+];
+
+// A provider with no key is skipped entirely rather than tried and rejected.
+const ACTIVE_PROVIDERS = PROVIDERS.filter((p) => p.key);
+
+const TEXT_ATTEMPTS = ACTIVE_PROVIDERS.flatMap((p) =>
+  p.textModels.map((model) => ({ provider: p, model })),
+);
+const VISION_ATTEMPTS = ACTIVE_PROVIDERS.flatMap((p) =>
+  p.visionModels.map((model) => ({ provider: p, model })),
+);
+
+if (!ACTIVE_PROVIDERS.length) {
+  console.error('!! no AI provider has a key set - set GEMINI_API_KEY, GROQ_API_KEY or OPENROUTER_API_KEY');
+  process.exit(1);
+}
+
 const REQUEST_TIMEOUT_MS = 30000;
 const IMAGE_TIMEOUT_MS = 45000;
 // Ceiling for the whole fallback chain, so trying several models cannot add up
@@ -97,11 +157,13 @@ const BUILD_ID = process.env.RENDER_GIT_COMMIT || 'local';
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
-    configured: !!OPENROUTER_API_KEY,
+    configured: ACTIVE_PROVIDERS.length > 0,
     model: OPENROUTER_MODEL,
     build: BUILD_ID,
-    textModels: TEXT_MODELS.length,
-    visionModels: VISION_MODELS.length,
+    // Names only, never keys, so this endpoint is safe to expose.
+    providers: ACTIVE_PROVIDERS.map((p) => p.name),
+    textAttempts: TEXT_ATTEMPTS.length,
+    visionAttempts: VISION_ATTEMPTS.length,
   });
 });
 
@@ -197,21 +259,20 @@ function validateImage(image, mimeType) {
 }
 
 // ---------- OpenRouter helpers ----------
-function aiHeaders() {
+function providerHeaders(provider) {
   return {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-    'HTTP-Referer': 'https://studybuddy.ai',
-    'X-Title': 'StudyBuddy AI',
+    Authorization: `Bearer ${provider.key}`,
+    ...(provider.extraHeaders ?? {}),
   };
 }
 
-function openAiRequest(body, timeoutMs) {
+function openAiRequest(provider, body, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(OPENROUTER_API_URL, {
+  return fetch(provider.url, {
     method: 'POST',
-    headers: aiHeaders(),
+    headers: providerHeaders(provider),
     body: JSON.stringify(body),
     signal: controller.signal,
   }).finally(() => clearTimeout(timer));
@@ -220,8 +281,9 @@ function openAiRequest(body, timeoutMs) {
 /** Call the first text model that succeeds. */
 async function callTextModel(systemPrompt, messages, maxTokens = 2000) {
   let lastError = 'AI unavailable';
-  for (const model of TEXT_MODELS) {
+  for (const { provider, model } of TEXT_ATTEMPTS) {
     const response = await openAiRequest(
+      provider,
       { model, messages: [{ role: 'system', content: systemPrompt }, ...messages], max_tokens: maxTokens },
       REQUEST_TIMEOUT_MS,
     );
@@ -244,9 +306,9 @@ async function streamText(systemPrompt, messages, res) {
   // been spent the student gets an answer or a friendly error, never silence.
   const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
 
-  for (const model of TEXT_MODELS) {
+  for (const { provider, model } of TEXT_ATTEMPTS) {
     if (Date.now() >= deadline) {
-      console.error(`[text] budget exhausted after ${TEXT_MODELS.length} candidates`);
+      console.error(`[text] budget exhausted after ${TEXT_ATTEMPTS.length} candidates`);
       break;
     }
     const controller = new AbortController();
@@ -260,9 +322,9 @@ async function streamText(systemPrompt, messages, res) {
     let full = '';
 
     try {
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(provider.url, {
       method: 'POST',
-      headers: aiHeaders(),
+      headers: providerHeaders(provider),
       body: JSON.stringify({
         model,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
@@ -281,7 +343,7 @@ async function streamText(systemPrompt, messages, res) {
       } catch {
         detail = '(body unreadable)';
       }
-      console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
+      console.error(`[upstream] ${provider.name}/${model} -> ${response.status} ${detail}`);
       lastError = `status-${response.status}`;
       continue;
     }
@@ -321,7 +383,10 @@ async function streamText(systemPrompt, messages, res) {
     }
 
     if (full) {
-      console.log(`[timing] complete=${Date.now() - startedAt}ms chars=${full.length} model=${model}`);
+      console.log(
+        `[timing] complete=${Date.now() - startedAt}ms chars=${full.length} ` +
+          `provider=${provider.name} model=${model}`,
+      );
       return full;
     }
     console.error(`[upstream] ${model} returned an empty stream`);
@@ -356,7 +421,7 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
   // "reason" field; the phone always renders its own friendly wording.
   const outcomes = [];
 
-  for (const model of VISION_MODELS) {
+  for (const { provider, model } of VISION_ATTEMPTS) {
     if (Date.now() >= deadline) {
       console.error('[vision] budget exhausted');
       break;
@@ -369,9 +434,9 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
     let full = '';
 
     try {
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(provider.url, {
       method: 'POST',
-      headers: aiHeaders(),
+      headers: providerHeaders(provider),
       body: JSON.stringify({
         model,
         messages: [
@@ -399,8 +464,8 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
       } catch {
         detail = '(body unreadable)';
       }
-      console.error(`[upstream] ${model} -> ${response.status} ${detail}`);
-      outcomes.push(`${model.split('/').pop().split(':')[0]}=${response.status}`);
+      console.error(`[upstream] ${provider.name}/${model} -> ${response.status} ${detail}`);
+      outcomes.push(`${provider.name}:${model.split('/').pop().split(':')[0]}=${response.status}`);
       lastError = `status-${response.status}`;
       // Free vision models share a rate limit, so pause before the next
       // attempt rather than tripping it again immediately.
@@ -438,7 +503,9 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
     }
 
     if (full) {
-      console.log(`[vision] used=${model} chars=${full.length} ms=${Date.now() - startedAt}`);
+      console.log(
+        `[vision] used=${provider.name}/${model} chars=${full.length} ms=${Date.now() - startedAt}`,
+      );
       return full;
     }
     console.error(`[upstream] ${model} returned an empty image stream`);
@@ -472,8 +539,9 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
 async function callVision(base64Image, mimeType, systemPrompt, userText) {
   let lastError = 'AI unavailable';
 
-  for (const model of VISION_MODELS) {
+  for (const { provider, model } of VISION_ATTEMPTS) {
     const response = await openAiRequest(
+      provider,
       {
         model,
         messages: [
@@ -869,5 +937,8 @@ app.post('/api/check-answer', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`StudyBuddy AI server on port ${PORT}`);
   console.log(`Text model: ${OPENROUTER_MODEL}`);
-  console.log(`Key configured: ${!!OPENROUTER_API_KEY}`);
+  console.log(
+    `Providers: ${ACTIVE_PROVIDERS.map((p) => p.name).join(', ') || 'none'}`,
+  );
+console.log(`Text attempts: ${TEXT_ATTEMPTS.length}, vision attempts: ${VISION_ATTEMPTS.length}`);
 });
