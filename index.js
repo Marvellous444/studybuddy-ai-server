@@ -10,7 +10,22 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
 
-const TEXT_MODELS = [OPENROUTER_MODEL];
+const TEXT_MODEL_FALLBACKS = [
+  'nvidia/nemotron-3.5-lightning:free',
+  'inclusionai/ling-3.0-flash-sante:free',
+  'qwen/qwen3.8-27b:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'thinkingmachines/inkling:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'poolside/laguna-s-2.1:free',
+];
+
+// The configured model is tried first, then the fallbacks. This chain matters
+// more than it looks: free models get rate limited and sometimes return an
+// empty stream, and with only one model any hiccup was a hard failure for the
+// student. Falling through turns a dead end into a slightly slower answer.
+const TEXT_MODELS = [...new Set([OPENROUTER_MODEL, ...TEXT_MODEL_FALLBACKS])];
 
 // Vision-capable free models, tried in order until one answers.
 const VISION_MODELS = [
@@ -19,10 +34,15 @@ const VISION_MODELS = [
   'google/gemma-4-31b-it:free',
   'thinkingmachines/inkling-small:free',
   'dots-studio/dots-3-note-preview:free',
+  'inclusionai/ling-3.0-flash-sante:free',
+  'nvidia/nemotron-3.5-lightning:free',
 ];
 
 const REQUEST_TIMEOUT_MS = 30000;
 const IMAGE_TIMEOUT_MS = 45000;
+// Ceiling for the whole fallback chain, so trying several models cannot add up
+// to minutes of silence before the student sees anything.
+const TOTAL_ATTEMPT_BUDGET_MS = 50000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB base64 payload
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic'];
 
@@ -205,10 +225,19 @@ async function callTextModel(systemPrompt, messages, maxTokens = 2000) {
 /** Stream a text response, trying each model in order. */
 async function streamText(systemPrompt, messages, res) {
   let lastError = 'AI unavailable';
+  // A fallback chain must never turn into a long wait. Once this much time has
+  // been spent the student gets an answer or a friendly error, never silence.
+  const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
 
   for (const model of TEXT_MODELS) {
+    if (Date.now() >= deadline) {
+      console.error(`[text] budget exhausted after ${TEXT_MODELS.length} candidates`);
+      break;
+    }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // Never let one model use the whole budget.
+    const perModel = Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now());
+    const timer = setTimeout(() => controller.abort(), perModel);
     const startedAt = Date.now();
 
     const response = await fetch(OPENROUTER_API_URL, {
@@ -285,10 +314,16 @@ async function streamText(systemPrompt, messages, res) {
 /** Stream a vision response, trying each vision model in order. */
 async function streamVision(base64Image, mimeType, systemPrompt, userText, res) {
   let lastError = 'AI unavailable';
+  const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
 
   for (const model of VISION_MODELS) {
+    if (Date.now() >= deadline) {
+      console.error('[vision] budget exhausted');
+      break;
+    }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+    const perModel = Math.min(IMAGE_TIMEOUT_MS, deadline - Date.now());
+    const timer = setTimeout(() => controller.abort(), perModel);
     const startedAt = Date.now();
 
     const response = await fetch(OPENROUTER_API_URL, {
