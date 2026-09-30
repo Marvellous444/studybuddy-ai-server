@@ -208,7 +208,7 @@ async function streamOpenRouterWithImage(base64Image, mimeType, systemPrompt, me
       'X-Title': 'StudyBuddy AI',
     },
     body: JSON.stringify({
-      model: OPENROUTER_VISION_MODEL,
+      model: VISION_MODELS[0],
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
@@ -498,9 +498,19 @@ app.post('/api/solve-photo', async (req, res) => {
       });
 
       if (response.ok) {
-        console.log(`[vision] used model: ${model}`);
         const data = await response.json();
-        return res.json({ response: data?.choices?.[0]?.message?.content || 'No response.' });
+        const text = data?.choices?.[0]?.message?.content;
+
+        // Check if we got actual content
+        if (text && text.trim().length > 0) {
+          console.log(`[vision] used model: ${model}`);
+          return res.json({ response: text });
+        }
+
+        // Model returned empty - try next one
+        console.log(`[vision] ${model} returned empty, trying next...`);
+        lastError = 'Model returned empty response';
+        continue;
       }
 
       // If rate limited, try next model
