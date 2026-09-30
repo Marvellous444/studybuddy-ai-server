@@ -234,6 +234,14 @@ function buildSystemPrompt(schoolLevel, subject, answerStyle, language) {
       'Never state a fact you are unsure about. If a question is unclear, ask for clarification.',
   );
 
+  // Gemini opens with pleasantries such as "Hey there!" or "Let's solve this
+  // together". On a homework answer the student is trying to read, that is noise
+  // in front of the answer, so it is ruled out explicitly.
+  parts.push(
+    'Begin immediately with the answer, the first step, or the restated question. ' +
+      'Do not open with a greeting, an offer of help, or conversational filler.',
+  );
+
   return parts.join(' ');
 }
 
