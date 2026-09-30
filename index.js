@@ -91,8 +91,18 @@ app.get('/', (_req, res) => {
   res.json({ status: 'ok', service: 'StudyBuddy AI' });
 });
 
+// Identifies the running commit so a deploy can be confirmed rather than assumed.
+const BUILD_ID = process.env.RENDER_GIT_COMMIT || 'local';
+
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', configured: !!OPENROUTER_API_KEY, model: OPENROUTER_MODEL });
+  res.json({
+    status: 'ok',
+    configured: !!OPENROUTER_API_KEY,
+    model: OPENROUTER_MODEL,
+    build: BUILD_ID,
+    textModels: TEXT_MODELS.length,
+    visionModels: VISION_MODELS.length,
+  });
 });
 
 // ---------- Prompt building ----------
@@ -527,7 +537,12 @@ function sleep(ms) {
 function errorReason(err) {
   const raw = String(err?.message ?? '');
   const status = raw.match(/status-(\d{3})/);
-  if (status) return `UPSTREAM_${status[1]}`;
+  // Keep the "|model=status,..." summary the vision chain attaches, otherwise
+  // the reason that tells us which models failed is thrown away.
+  if (status) {
+    const summary = raw.includes('|') ? `|${raw.split('|').slice(1).join('|')}` : '';
+    return `UPSTREAM_${status[1]}${summary}`;
+  }
   if (raw.includes('empty')) return 'EMPTY_RESPONSE';
   if (raw.includes('timeout')) return 'TIMEOUT';
   if (raw.includes('error')) return 'NETWORK_ERROR';
