@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
+const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'google/gemma-4-31b-it:free';
 
 // Request timeout (30 seconds)
 const REQUEST_TIMEOUT = 30000;
@@ -198,7 +199,7 @@ async function streamOpenRouterWithImage(base64Image, mimeType, systemPrompt, me
       'X-Title': 'StudyBuddy AI',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model: OPENROUTER_VISION_MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
@@ -431,7 +432,7 @@ app.post('/api/solve-photo', async (req, res) => {
         'X-Title': 'StudyBuddy AI',
       },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
+        model: OPENROUTER_VISION_MODEL,
         messages: [
           { role: 'system', content: systemPrompt },
           {
