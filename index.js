@@ -469,6 +469,8 @@ function errorReason(err) {
   const status = raw.match(/status-(\d{3})/);
   if (status) return `UPSTREAM_${status[1]}`;
   if (raw.includes('empty')) return 'EMPTY_RESPONSE';
+  if (raw.includes('timeout')) return 'TIMEOUT';
+  if (raw.includes('error')) return 'NETWORK_ERROR';
   return 'UNKNOWN';
 }
 
