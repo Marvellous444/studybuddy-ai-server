@@ -654,7 +654,7 @@ const WRITING_TASKS = {
 };
 
 app.post('/api/writing-assistant', async (req, res) => {
-  const { text, task, subject = null, schoolLevel, answerStyle, language } = req.body ?? {};
+  const { text, task, subject = null, schoolLevel, answerStyle } = req.body ?? {};
 
   const trimmed = String(text ?? '').trim();
   if (!trimmed) return res.status(400).json({ error: 'Please paste or type some text first.' });
