@@ -11,6 +11,15 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
 const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'qwen/qwen3.8-27b:free';
 
+// Multiple free vision models as fallbacks (free models get rate-limited often)
+const VISION_MODELS = [
+  'qwen/qwen3.8-27b:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'thinkingmachines/inkling-small:free',
+  'dots-studio/dots-3-note-preview:free',
+];
+
 // Request timeout (30 seconds)
 const REQUEST_TIMEOUT = 30000;
 
@@ -458,40 +467,49 @@ app.post('/api/solve-photo', async (req, res) => {
 
     const userText = question || 'Solve this homework.';
 
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://studybuddy.ai',
-        'X-Title': 'StudyBuddy AI',
-      },
-      body: JSON.stringify({
-        model: OPENROUTER_VISION_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: photoPrompt + '\n\n' + userText },
-              {
-                type: 'image_url',
-                image_url: { url: `data:${mimeType};base64,${image}` },
-              },
-            ],
-          },
-        ],
-        max_tokens: 2000,
-      }),
-    });
+    // Try each vision model until one works (free models get rate-limited)
+    let lastError = 'All models busy';
+    for (const model of VISION_MODELS) {
+      const response = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://studybuddy.ai',
+          'X-Title': 'StudyBuddy AI',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: photoPrompt + '\n\n' + userText },
+                {
+                  type: 'image_url',
+                  image_url: { url: `data:${mimeType};base64,${image}` },
+                },
+              ],
+            },
+          ],
+          max_tokens: 2000,
+        }),
+      });
 
-    if (!response.ok) {
+      if (response.ok) {
+        console.log(`[vision] used model: ${model}`);
+        const data = await response.json();
+        return res.json({ response: data?.choices?.[0]?.message?.content || 'No response.' });
+      }
+
+      // If rate limited, try next model
       const errData = await response.json().catch(() => ({}));
-      console.error(`[error] solve-photo OpenRouter: ${errData?.error?.message || response.status}`);
-      throw new Error(errData?.error?.message || `AI request failed (${response.status})`);
+      lastError = errData?.error?.message || `Status ${response.status}`;
+      console.log(`[vision] ${model} failed: ${lastError.substring(0, 100)}`);
     }
-    const data = await response.json();
-    res.json({ response: data?.choices?.[0]?.message?.content || 'No response.' });
+
+    throw new Error(lastError);
   } catch (error) {
     console.error(`[error] solve-photo: ${error.message}`);
     res.status(500).json({ error: 'StudyBuddy could not read your photo. Please try again.' });
