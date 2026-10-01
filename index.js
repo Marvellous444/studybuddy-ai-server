@@ -181,6 +181,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ---------- Prompt building ----------
+const { registerLearningRoutes } = require('./learning');
+
 const SUBJECT_GUIDE = {
   Math: 'Show equations and every step. Explain why each step is taken and end with the final answer.',
   Science: 'Explain the underlying idea accurately, then connect it to everyday examples.',
@@ -986,6 +988,19 @@ app.post('/api/check-answer', async (req, res) => {
     console.error('[check-answer]', err?.message);
     res.status(500).json({ error: 'Could not check that answer right now.' });
   }
+});
+
+// ---------- Learning: Teach Me, Hint, Practice Me ----------
+// Registered here rather than in learning.js itself so this file stays the one
+// place that decides what the API looks like.
+registerLearningRoutes(app, {
+  buildSystemPrompt,
+  callTextModel,
+  streamText,
+  setupSSE,
+  streamError,
+  readLanguage,
+  friendlyProviderError,
 });
 
 // ---------- Start ----------
