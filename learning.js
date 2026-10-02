@@ -155,10 +155,15 @@ function registerLearningRoutes(app, deps) {
       // Teaching needs longer than a short-answer request: the model reasons
       // before its first token, and the default 30 second total timer aborted it
       // before it produced anything.
-      await streamText(prompt, [{ role: 'user', content: 'Teach me this problem.' }], res, {
+      const text = await streamText(prompt, [{ role: 'user', content: 'Teach me this problem.' }], res, {
         requestTimeoutMs: 90000,
         totalBudgetMs: 150000,
       });
+      // Close it the way every other streaming endpoint does. Without this the
+      // response stayed open, so the app never left its loading state and the
+      // hint and practice sections never appeared.
+      res.write(`data: ${JSON.stringify({ done: true, chars: text.length })}\n\n`);
+      res.end();
     } catch (err) {
       console.error('[learn/teach]', err?.message);
       streamError(res, friendlyProviderError(err), errorReasonLike(err));
@@ -372,12 +377,14 @@ function registerLearningRoutes(app, deps) {
       setupSSE(res);
       // A follow-up can be "why?", which asks for reasoning, so it gets the same
       // longer budget as teaching rather than the short-answer default.
-      await streamText(
+      const text = await streamText(
         prompt,
         [...prior, { role: 'user', content: safe(followUp, 400) }],
         res,
         { requestTimeoutMs: 90000, totalBudgetMs: 150000 },
       );
+      res.write(`data: ${JSON.stringify({ done: true, chars: text.length })}\n\n`);
+      res.end();
     } catch (err) {
       console.error('[learn/followup]', err?.message);
       streamError(res, friendlyProviderError(err), 'upstream');
