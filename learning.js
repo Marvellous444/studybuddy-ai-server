@@ -152,7 +152,13 @@ function registerLearningRoutes(app, deps) {
         .join('\n');
 
       setupSSE(res);
-      await streamText(prompt, [{ role: 'user', content: 'Teach me this problem.' }], res);
+      // Teaching needs longer than a short-answer request: the model reasons
+      // before its first token, and the default 30 second total timer aborted it
+      // before it produced anything.
+      await streamText(prompt, [{ role: 'user', content: 'Teach me this problem.' }], res, {
+        requestTimeoutMs: 90000,
+        totalBudgetMs: 150000,
+      });
     } catch (err) {
       console.error('[learn/teach]', err?.message);
       streamError(res, friendlyProviderError(err), errorReasonLike(err));
@@ -364,7 +370,14 @@ function registerLearningRoutes(app, deps) {
         .filter((m) => m.content);
 
       setupSSE(res);
-      await streamText(prompt, [...prior, { role: 'user', content: safe(followUp, 400) }], res);
+      // A follow-up can be "why?", which asks for reasoning, so it gets the same
+      // longer budget as teaching rather than the short-answer default.
+      await streamText(
+        prompt,
+        [...prior, { role: 'user', content: safe(followUp, 400) }],
+        res,
+        { requestTimeoutMs: 90000, totalBudgetMs: 150000 },
+      );
     } catch (err) {
       console.error('[learn/followup]', err?.message);
       streamError(res, friendlyProviderError(err), 'upstream');

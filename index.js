@@ -343,11 +343,17 @@ async function callTextModel(systemPrompt, messages, maxTokens = 2000) {
 }
 
 /** Stream a text response, trying each model in order. */
-async function streamText(systemPrompt, messages, res) {
+async function streamText(systemPrompt, messages, res, options = {}) {
   let lastError = 'AI unavailable';
+  // Per-route overrides. Teaching asks for a structured multi-part lesson, and
+  // the lead model reasons for a long time before its first token, so a 30 second
+  // total timer killed it before it could say anything. Callers that do not pass
+  // these get exactly the previous behaviour.
+  const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const totalBudgetMs = options.totalBudgetMs ?? TOTAL_ATTEMPT_BUDGET_MS;
   // A fallback chain must never turn into a long wait. Once this much time has
   // been spent the student gets an answer or a friendly error, never silence.
-  const deadline = Date.now() + TOTAL_ATTEMPT_BUDGET_MS;
+  const deadline = Date.now() + totalBudgetMs;
 
   for (const { provider, model } of TEXT_ATTEMPTS) {
     if (Date.now() >= deadline) {
@@ -359,7 +365,7 @@ async function streamText(systemPrompt, messages, res) {
     // The timer must cover the whole attempt, not just the response headers.
     // Clearing it as soon as fetch resolves leaves a stream that then stalls
     // with no timeout at all, which is how a request could hang for minutes.
-    const perModel = Math.max(1000, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()));
+    const perModel = Math.max(1000, Math.min(requestTimeoutMs, deadline - Date.now()));
     const timer = setTimeout(() => controller.abort(), perModel);
     const startedAt = Date.now();
     let full = '';
