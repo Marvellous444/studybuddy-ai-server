@@ -199,7 +199,10 @@ function registerLearningRoutes(app, deps) {
         .filter(Boolean)
         .join('\n');
 
-      const text = await callTextModel(prompt, [{ role: 'user', content: 'Give me a hint.' }], 300);
+      // 2000, not something small: the lead model is a reasoning model and
+      // spends part of this budget thinking before it writes anything. A small
+      // budget left it a few tokens of answer, so hints stopped mid-sentence.
+      const text = await callTextModel(prompt, [{ role: 'user', content: 'Give me a hint.' }], 2000);
       res.json({ hint: safe(text, 400) });
     } catch (err) {
       console.error('[learn/hint]', err?.message);
@@ -241,7 +244,7 @@ function registerLearningRoutes(app, deps) {
         '{"question":"...","answer":"...","hint":"..."}',
       ].join('\n');
 
-      const text = await callTextModel(prompt, [{ role: 'user', content: 'Give me a practice problem.' }], 500);
+      const text = await callTextModel(prompt, [{ role: 'user', content: 'Give me a practice problem.' }], 2000);
       const data = extractJson(text);
       if (!data || !data.question || data.answer === undefined || data.answer === null) {
         throw new Error('parse');
@@ -301,7 +304,7 @@ function registerLearningRoutes(app, deps) {
       const text = await callTextModel(
         prompt,
         [{ role: 'user', content: 'Check my answer.' }],
-        400,
+        2000,
       );
       const data = extractJson(text);
       if (!data || typeof data.correct !== 'boolean') throw new Error('parse');
