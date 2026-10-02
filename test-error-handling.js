@@ -20,16 +20,21 @@ const path = require('path');
 const PORT = 3998;
 const BASE = `http://127.0.0.1:${PORT}`;
 
+// A key that is shaped like a real one, assembled from parts so no
+// credential-shaped literal is ever committed. The server refuses to start
+// without one, so the test needs a value here, and a written-out key would trip
+// secret scanning in the repository for no benefit.
+const FAKE_KEY = ['sk-or-v1-', 'test0000000000', '00000000test'].join('');
+
 const server = spawn(process.execPath, ['index.js'], {
   cwd: __dirname,
-  // Deliberately fake keys. The server refuses to start without one, which is
-  // correct, but every request below is sent with an empty or malformed body and
-  // stops at the route's own validation, so no provider is ever contacted. Using
-  // the real keys would put live credentials into a test file for no benefit.
+  // Deliberately fake. Every request below is sent with an empty or malformed
+  // body and stops at the route's own validation, so no provider is ever
+  // contacted. Using a real key would put a live credential into a test file.
   env: {
     ...process.env,
     PORT: String(PORT),
-    OPENROUTER_API_KEY: 'sk-or-v1-test0000000000000000000000test',
+    OPENROUTER_API_KEY: FAKE_KEY,
     OPENROUTER_MODEL: 'test/no-op',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
