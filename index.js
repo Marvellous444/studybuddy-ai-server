@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { redactSecrets } = require('./redact');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -386,9 +387,13 @@ async function streamText(systemPrompt, messages, res, options = {}) {
     if (!response.ok) {
       // Log why the provider refused. This never leaves the server: the phone
       // only ever receives the friendly message.
+      //
+      // Redacted first, because provider error bodies routinely echo the
+      // credential back and an expired key would otherwise be written to the
+      // log in full.
       let detail = '';
       try {
-        detail = (await response.text()).slice(0, 400);
+        detail = redactSecrets((await response.text()).slice(0, 400));
       } catch {
         detail = '(body unreadable)';
       }
@@ -507,9 +512,13 @@ async function streamVision(base64Image, mimeType, systemPrompt, userText, res) 
     if (!response.ok) {
       // Log why the provider refused. This never leaves the server: the phone
       // only ever receives the friendly message.
+      //
+      // Redacted first, because provider error bodies routinely echo the
+      // credential back and an expired key would otherwise be written to the
+      // log in full.
       let detail = '';
       try {
-        detail = (await response.text()).slice(0, 400);
+        detail = redactSecrets((await response.text()).slice(0, 400));
       } catch {
         detail = '(body unreadable)';
       }
@@ -1007,6 +1016,52 @@ registerLearningRoutes(app, {
   streamError,
   readLanguage,
   friendlyProviderError,
+});
+
+// ---------- Failure handling ----------
+
+/**
+ * Last-resort 404.
+ *
+ * Without this, Express answers an unknown path with its own HTML page, which
+ * confirms the framework and returns a body that the app has to try to parse as
+ * JSON. The app treats a failed request as a friendly error, but only if the
+ * body is JSON, so this keeps every response shape consistent.
+ *
+ * Deliberately placed last, after every route, so it only catches paths that
+ * matched nothing.
+ */
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found.' });
+});
+
+/**
+ * Last-resort error handler.
+ *
+ * Express's built-in handler is the other way an internal detail escapes. On a
+ * malformed JSON body it answers with the raw parser error, and on an uncaught
+ * throw in development mode it returns the stack trace, which can name files,
+ * line numbers and internal function names.
+ *
+ * Anything reaching here is logged in full for the developer, with secrets
+ * removed, and answered with a fixed sentence the app can display. Express
+ * recognises this as the error handler from its four parameters, so the unused
+ * "next" must stay in the signature.
+ */
+app.use((err, _req, res, _next) => {
+  // A malformed body is the caller's problem, not ours, and the parser message
+  // can echo the offending input, so it is logged as a shape only.
+  const isBadBody = err?.type === 'entity.parse.failed' || err?.status === 400;
+  if (isBadBody) {
+    console.error(`[http] malformed request body: ${err.type ?? 'parse error'}`);
+    return res.status(400).json({ error: 'That request could not be read.' });
+  }
+
+  console.error(`[http] unhandled: ${redactSecrets(err?.message ?? String(err))}`);
+  // If the response already started streaming, the headers are gone and the
+  // only thing left to do is close the connection.
+  if (res.headersSent) return res.end();
+  return res.status(500).json({ error: 'StudyBuddy is having trouble right now. Please try again.' });
 });
 
 // ---------- Start ----------
